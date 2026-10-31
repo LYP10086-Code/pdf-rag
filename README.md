@@ -249,9 +249,10 @@ git remote add wsl '\\wsl.localhost\Ubuntu-24.04\home\lyp\projects\pdf-rag.git'
 推送钩子（`~/projects/pdf-rag.git/hooks/post-receive`）会调用 WSL 内的部署脚本，依次完成：
 
 1. 将提交内容同步到 `/home/lyp/projects/pdf-rag`，保留 `.env`、`.venv`、`storage`、`node_modules`
-2. 执行 `docker compose build api` 重建镜像，前端在镜像构建阶段生成
-3. 执行 `docker compose up -d --no-deps --force-recreate api` 重建 API 容器
-4. 请求 `/api/health` 做健康检查
+2. 优先拉取与提交 SHA 对应的 GHCR 镜像 `ghcr.io/lyp10086-code/pdf-rag-api:<commit-sha>`
+3. 镜像尚未生成或拉取失败时，回退到 `docker compose build api` 本地构建
+4. 执行 `docker compose up -d --no-deps --force-recreate api` 重建 API 容器
+5. 请求 `/api/health` 做健康检查
 
 部署脚本位于 `~/projects/pdf-rag.git/hooks/deploy-in-wsl.sh`，只存在于 WSL，不在 Git 仓库内。钩子会先检查提交里是否包含 `Dockerfile` 和带 `api` 服务的 compose 文件，缺失时直接失败并保留当前工作区，避免把容器配置回退掉。只推送已提交的内容，Windows 侧未提交的改动不会同步。
 
@@ -272,7 +273,7 @@ docker compose pull api
 docker compose up -d --no-deps --force-recreate api
 ```
 
-`docker login` 需要带 `read:packages` 的 PAT；GHCR 包默认私有，也可以在包设置里改为公开。当前 WSL 钩子仍使用本地构建，不依赖 GHCR。
+`docker login` 需要带 `read:packages` 的 PAT；GHCR 包默认私有，也可以在包设置里改为公开。WSL 钩子优先拉取 GHCR 镜像，拉取失败时回退本地构建。
 
 ### 查看与停止
 
