@@ -1,0 +1,17 @@
+.env
+.venv/
+.venv-mineru/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+storage/originals/*
+storage/markdown/*
+storage/images/*
+!storage/originals/.gitkeep
+!storage/markdown/.gitkeep
+!storage/images/.gitkeep
+data/
+*.log
+web/node_modules/
+.ruff_cache/

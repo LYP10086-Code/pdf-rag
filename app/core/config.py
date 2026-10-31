@@ -1,0 +1,109 @@
+"""应用配置：统一从项目根 `.env` 读取，避免散落的 os.environ 访问。"""
+
+from functools import lru_cache
+from pathlib import Path
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+ENV_FILE = PROJECT_ROOT / ".env"
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=str(ENV_FILE),
+        env_file_encoding="utf-8",
+        extra="ignore",
+        case_sensitive=False,
+    )
+
+    app_name: str = "pdf-rag"
+    app_version: str = "1.0.0"
+    log_level: str = "INFO"
+
+    # PostgreSQL：业务唯一权威（文档、分块、任务状态）
+    database_url: str = (
+        "postgresql+psycopg://raguser:change-me-strong-password@localhost:5432/ragdb"
+    )
+    db_echo: bool = False
+
+    # Qdrant：只存 child 向量与定位 payload
+    qdrant_url: str = "http://localhost:6333"
+    qdrant_api_key: str | None = None
+    qdrant_collection: str = "pdf_knowledge"
+    qdrant_vector_size: int = 1024
+
+    # vLLM / Qwen3-4B-AWQ（OpenAI 兼容接口）
+    llm_base_url: str = "http://localhost:8000/v1"
+    llm_model: str = "Qwen/Qwen3-4B-AWQ"
+    llm_api_key: str = "EMPTY"
+    llm_temperature: float = 0.1
+    llm_max_tokens: int = 1024
+
+    # Embedding / Reranker 默认放 CPU，避免与 LLM 争抢 8GB 显存
+    hf_endpoint: str = "https://hf-mirror.com"
+    hf_hub_offline: int = 0
+    embedding_model: str = "BAAI/bge-m3"
+    embedding_device: str = "cpu"
+    embedding_batch_size: int = 8
+
+    reranker_enabled: bool = True
+    reranker_model: str = "BAAI/bge-reranker-base"
+    reranker_device: str = "cpu"
+    reranker_max_length: int = 512
+
+    # 检索参数：沿用现有 78 题评测结论；上下文预算需与 vLLM 4096 上下文匹配
+    retrieval_candidate_depth: int = 20
+    retrieval_default_k: int = 5
+    hybrid_bm25_weight: float = 0.2
+    rrf_k: int = 60
+    context_budget_chars: int = 2500
+    merge_parents: bool = True
+
+    # 分块参数
+    chunk_size: int = 500
+    chunk_overlap: int = 50
+
+    # PDF 解析：项目自研解析链路（标题物理探测 + 表格重建 + 清洗）
+    pdf_parser: str = "custom"
+
+    # 存储与业务默认值
+    max_upload_mb: int = 200
+    storage_dir: str = "storage"
+    default_user_id: str = "local"
+    default_kb_id: str = "default"
+    chat_mode: str = "rag"
+    agent_max_iterations: int = 3
+
+    @property
+    def storage_path(self) -> Path:
+        path = Path(self.storage_dir)
+        return path if path.is_absolute() else PROJECT_ROOT / path
+
+    @property
+    def originals_dir(self) -> Path:
+        return self.storage_path / "originals"
+
+    @property
+    def markdown_dir(self) -> Path:
+        return self.storage_path / "markdown"
+
+    @property
+    def images_dir(self) -> Path:
+        return self.storage_path / "images"
+
+    @property
+    def max_upload_bytes(self) -> int:
+        return self.max_upload_mb * 1024 * 1024
+
+    def ensure_dirs(self) -> None:
+        for path in (self.originals_dir, self.markdown_dir, self.images_dir):
+            path.mkdir(parents=True, exist_ok=True)
+
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()
+
+
+settings = get_settings()

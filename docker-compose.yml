@@ -1,0 +1,74 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: rag-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: rag-qdrant
+    restart: unless-stopped
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+
+  vllm:
+    image: vllm/vllm-openai:latest
+    container_name: rag-vllm
+    restart: unless-stopped
+    ipc: host
+    ports:
+      - "8000:8000"
+    volumes:
+      - huggingface_cache:/root/.cache/huggingface
+    environment:
+      HF_ENDPOINT: ${HF_ENDPOINT:-https://hf-mirror.com}
+    # Qwen3 通过 hermes 解析工具调用；如果所用 vLLM 版本不支持，先删掉
+    # --enable-auto-tool-choice / --tool-call-parser 两行再启动（RAG 模式不需要）。
+    command:
+      - --model
+      - Qwen/Qwen3-4B-AWQ
+      - --quantization
+      - awq
+      - --dtype
+      - half
+      - --max-model-len
+      - "4096"
+      - --gpu-memory-utilization
+      - "0.80"
+      - --max-num-seqs
+      - "1"
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --enable-auto-tool-choice
+      - --tool-call-parser
+      - hermes
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+volumes:
+  postgres_data:
+  qdrant_data:
+  huggingface_cache:
