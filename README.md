@@ -227,8 +227,10 @@ Windows 侧可直接访问 `http://localhost:8080/`，WSL2 会把 localhost 转�
 ```bash
 cd ~/projects/pdf-rag
 docker compose build api
-docker compose up -d --no-deps api
+docker compose up -d --no-deps --force-recreate api
 ```
+
+Compose 对本地同 tag 的新镜像不一定判断为配置变化，更新时加 `--force-recreate` 可确保容器使用新镜像。
 
 ### 从 Windows 推送更新
 
@@ -248,7 +250,7 @@ git remote add wsl '\\wsl.localhost\Ubuntu-24.04\home\lyp\projects\pdf-rag.git'
 
 1. 将提交内容同步到 `/home/lyp/projects/pdf-rag`，保留 `.env`、`.venv`、`storage`、`node_modules`
 2. 执行 `docker compose build api` 重建镜像，前端在镜像构建阶段生成
-3. 执行 `docker compose up -d --no-deps api` 重建 API 容器
+3. 执行 `docker compose up -d --no-deps --force-recreate api` 重建 API 容器
 4. 请求 `/api/health` 做健康检查
 
 部署脚本位于 `~/projects/pdf-rag.git/hooks/deploy-in-wsl.sh`，只存在于 WSL，不在 Git 仓库内。钩子会先检查提交里是否包含 `Dockerfile` 和带 `api` 服务的 compose 文件，缺失时直接失败并保留当前工作区，避免把容器配置回退掉。只推送已提交的内容，Windows 侧未提交的改动不会同步。
