@@ -1,0 +1,16 @@
+.git
+.env
+.venv/
+.venv-mineru/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+tests/
+storage/
+data/
+logs/
+*.log
+app/static/
+web/node_modules/

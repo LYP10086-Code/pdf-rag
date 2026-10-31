@@ -87,7 +87,9 @@ pdf-rag/
 ├── tests/                      # 纯函数测试
 ├── web/                        # React + Vite 前端源码
 ├── storage/                    # 原始 PDF、解析/分块产物、图片
-├── docker-compose.yml          # PostgreSQL / Qdrant / vLLM
+├── Dockerfile                  # API 镜像：前端构建 + CPU 运行时
+├── .dockerignore
+├── docker-compose.yml          # PostgreSQL / Qdrant / vLLM / API
 ├── requirements.txt
 ├── .env.example
 └── README.md
@@ -172,6 +174,101 @@ npm run dev
 ```
 
 Vite 会把 `/api` 代理到 `http://127.0.0.1:8080`。
+
+## WSL 部署与运行方式
+
+当前实际部署环境是 Windows 11 + WSL2 Ubuntu-24.04，API 以 Docker 容器运行：
+
+- Windows 源码目录：`c:\Users\l1y2p\Desktop\pdf-rag`
+- WSL 运行目录：`/home/lyp/projects/pdf-rag`
+- `rag-api` 镜像由本项目的 `Dockerfile` 构建；PostgreSQL、Qdrant、vLLM 使用官方镜像
+- Windows 仓库通过 `wsl` 远程推送到 WSL 内的裸仓库，再由钩子同步代码、重建镜像并重启容器
+
+### 启动顺序
+
+1. 启动 Docker Desktop，确认已开启 WSL 集成（Ubuntu-24.04）。
+2. 在 WSL 项目目录启动全部服务：
+
+```bash
+cd ~/projects/pdf-rag
+docker compose up -d
+docker compose ps
+```
+
+只启动或更新 API：
+
+```bash
+docker compose up -d --no-deps api
+```
+
+3. 检查服务：
+
+```bash
+curl http://localhost:8080/api/health
+```
+
+Windows 侧可直接访问 `http://localhost:8080/`，WSL2 会把 localhost 转发到 Linux。
+
+### 容器配置
+
+`.env` 中与容器相关的变量：
+
+| 变量 | 说明 | 当前 WSL 值 |
+|---|---|---|
+| `RAG_API_IMAGE` | API 镜像名 | `pdf-rag-api:local` |
+| `API_PORT` | 宿主机端口 | `8080` |
+| `STORAGE_HOST_DIR` | 宿主机 storage 目录 | `/home/lyp/projects/pdf-rag/storage` |
+| `HF_CACHE_DIR` | Embedding/Reranker 模型缓存 | `/home/lyp/.cache/huggingface` |
+
+容器内通过 compose 服务名访问基础服务：`postgres:5432`、`qdrant:6333`、`vllm:8000`。storage 挂载为 `/data/storage`，模型缓存挂载为 `/models`，模型权重不打进镜像。
+
+### 构建与更新镜像
+
+```bash
+cd ~/projects/pdf-rag
+docker compose build api
+docker compose up -d --no-deps api
+```
+
+### 从 Windows 推送更新
+
+Windows 仓库已配置指向 WSL 裸仓库的 `wsl` 远程：
+
+```powershell
+git push wsl main
+```
+
+首次配置时可执行：
+
+```powershell
+git remote add wsl '\\wsl.localhost\Ubuntu-24.04\home\lyp\projects\pdf-rag.git'
+```
+
+推送钩子（`~/projects/pdf-rag.git/hooks/post-receive`）会调用 WSL 内的部署脚本，依次完成：
+
+1. 将提交内容同步到 `/home/lyp/projects/pdf-rag`，保留 `.env`、`.venv`、`storage`、`node_modules`
+2. 执行 `docker compose build api` 重建镜像，前端在镜像构建阶段生成
+3. 执行 `docker compose up -d --no-deps api` 重建 API 容器
+4. 请求 `/api/health` 做健康检查
+
+部署脚本位于 `~/projects/pdf-rag.git/hooks/deploy-in-wsl.sh`，只存在于 WSL，不在 Git 仓库内。钩子会先检查提交里是否包含 `Dockerfile` 和带 `api` 服务的 compose 文件，缺失时直接失败并保留当前工作区，避免把容器配置回退掉。只推送已提交的内容，Windows 侧未提交的改动不会同步。
+
+### 查看与停止
+
+```bash
+docker compose ps
+docker compose logs -f api
+tail -f ~/projects/pdf-rag/logs/deploy.log
+docker compose restart api
+docker compose stop api
+```
+
+### 注意
+
+- 所有容器都设置了 `restart: unless-stopped`，Docker Desktop 启动后会自动恢复；API 不再需要手动运行 uvicorn。
+- 全量启动时如果 vLLM 因 `--enable-auto-tool-choice` / `--tool-call-parser` 启动失败，按 `docker-compose.yml` 里的注释删掉这两行再启动；RAG 模式不需要。
+- 开发调试仍可使用 `.venv` + uvicorn，但需要先 `docker compose stop api`，或换一个端口，避免和容器争用 8080。
+- 端口：API `8080`，vLLM `8000`，PostgreSQL `5432`，Qdrant `6333/6334`。
 
 ## 配置
 
