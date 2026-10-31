@@ -255,6 +255,25 @@ git remote add wsl '\\wsl.localhost\Ubuntu-24.04\home\lyp\projects\pdf-rag.git'
 
 部署脚本位于 `~/projects/pdf-rag.git/hooks/deploy-in-wsl.sh`，只存在于 WSL，不在 Git 仓库内。钩子会先检查提交里是否包含 `Dockerfile` 和带 `api` 服务的 compose 文件，缺失时直接失败并保留当前工作区，避免把容器配置回退掉。只推送已提交的内容，Windows 侧未提交的改动不会同步。
 
+### GitHub Actions 发布镜像
+
+`.github/workflows/build-image.yml` 在 push `main` 时自动构建并推送镜像：
+
+- 镜像：`ghcr.io/lyp10086-code/pdf-rag-api`
+- tag：完整 commit SHA 和 `latest`
+- 使用 Buildx 的 GHA 缓存
+
+GHCR 可选部署方式：
+
+```bash
+docker login ghcr.io
+export RAG_API_IMAGE=ghcr.io/lyp10086-code/pdf-rag-api:<commit-sha>
+docker compose pull api
+docker compose up -d --no-deps --force-recreate api
+```
+
+`docker login` 需要带 `read:packages` 的 PAT；GHCR 包默认私有，也可以在包设置里改为公开。当前 WSL 钩子仍使用本地构建，不依赖 GHCR。
+
 ### 查看与停止
 
 ```bash
