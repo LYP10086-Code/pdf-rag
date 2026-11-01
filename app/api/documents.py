@@ -33,6 +33,9 @@ class SearchRequest(BaseModel):
     merge_parents: bool | None = Field(
         None, description="true=父块归并（默认）；false=直接返回检索命中的子块"
     )
+    use_reranker: bool | None = Field(
+        None, description="true=重排（默认）；false=跳过重排，供评测对比使用"
+    )
 
 
 @router.post("/documents", status_code=202)
@@ -119,6 +122,7 @@ def search_in_document(
         k=body.k,
         merge_parents=body.merge_parents,
         debug=debug,
+        use_reranker=body.use_reranker,
     )
 
 
@@ -137,4 +141,5 @@ def search_documents(
         k=body.k,
         merge_parents=body.merge_parents,
         debug=debug,
+        use_reranker=body.use_reranker,
     )

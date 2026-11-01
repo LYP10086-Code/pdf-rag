@@ -10,7 +10,6 @@ import hashlib
 import logging
 import re
 import shutil
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -30,12 +29,10 @@ from app.core.models import (
     ParentChunk,
     new_id,
 )
-from app.ingestion.indexer import run_ingest_job
 from app.retrieval.hybrid import invalidate_bm25_cache
 
 logger = logging.getLogger(__name__)
 
-_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ingest")
 _CTRL_RE = re.compile(r"[\x00-\x1f]")
 _SAFE_RE = re.compile(r'[\\/:*?"<>|]')
 
@@ -138,7 +135,7 @@ def create_document(
     job = _create_job(db, document.id)
     db.commit()
 
-    _executor.submit(run_ingest_job, job.id, document.id)
+    # 解析交给独立 worker 容器从队列认领执行，api 不再进程内跑任务
     logger.info("文档 %s 上传完成，任务 %s 入队", document.id, job.id)
     return {
         "id": document.id,
@@ -172,7 +169,7 @@ def enqueue_reingest(db: Session, document_id: str) -> dict:
     document.error = None
     document.updated_at = _now()
     db.commit()
-    _executor.submit(run_ingest_job, job.id, document_id)
+    # 重新入队，由 worker 认领执行
     return {"document_id": document_id, "job_id": job.id, "status": document.status}
 
 

@@ -45,7 +45,8 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - huggingface_cache:/root/.cache/huggingface
+      # Qwen 权重缓存放宿主机目录，不使用 Docker 命名卷
+      - ${VLLM_CACHE_DIR:-./data/vllm}:/root/.cache/huggingface
     environment:
       HF_ENDPOINT: ${HF_ENDPOINT:-https://hf-mirror.com}
     # Qwen3 通过 hermes 解析工具调用；如果所用 vLLM 版本不支持，先删掉
@@ -81,10 +82,131 @@ services:
               count: 1
               capabilities: [gpu]
 
-  api:
+  embedder:
+    # 与 reranker 共用模型镜像（依赖集相同），与 api 业务镜像分离
+    image: ${RAG_MODEL_IMAGE:-pdf-rag-model:local}
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.model
+    container_name: rag-embedder
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      HF_HOME: /models
+      # 与下方 cpus 限制一致，避免 torch 按宿主机核数（24）开线程导致超订
+      OMP_NUM_THREADS: "4"
+      MKL_NUM_THREADS: "4"
+    command:
+      - python
+      - -m
+      - uvicorn
+      - app.embedder_server:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8001"
+    ports:
+      - "${EMBEDDER_PORT:-8001}:8001"
+    volumes:
+      # bge-m3 缓存与 reranker 服务共用同一宿主机目录
+      - ${HF_CACHE_DIR:-./data/huggingface}:/models
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8001/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 120s
+    deploy:
+      resources:
+        limits:
+          memory: 4g
+          cpus: "4.0"
+
+  reranker:
+    # 与 embedder 共用模型镜像（仅启动命令不同）
+    image: ${RAG_MODEL_IMAGE:-pdf-rag-model:local}
+    build:
+      context: .
+      dockerfile: Dockerfile.model
+    container_name: rag-reranker
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      HF_HOME: /models
+      OMP_NUM_THREADS: "4"
+      MKL_NUM_THREADS: "4"
+    command:
+      - python
+      - -m
+      - uvicorn
+      - app.reranker_server:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8002"
+    ports:
+      - "${RERANKER_PORT:-8002}:8002"
+    volumes:
+      - ${HF_CACHE_DIR:-./data/huggingface}:/models
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8002/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 120s
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+          cpus: "4.0"
+
+  worker:
+    # 入库任务队列消费者：认领 ingest_jobs 执行解析流水线，与 api 共用镜像。
+    # 解析重活隔离在这里，api 重建/重启不影响进行中的入库任务
+    image: ${RAG_API_IMAGE:-pdf-rag-api:local}
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: rag-worker
+    restart: unless-stopped
+    stop_grace_period: 30s
+    env_file: .env
+    environment:
+      # 与 api 相同：容器内通过 compose 网络访问基础服务，覆盖 .env 里的 localhost 地址
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      QDRANT_URL: http://qdrant:6333
+      EMBEDDING_API_URL: http://embedder:8001/v1
+      STORAGE_DIR: /data/storage
+    command:
+      - python
+      - -m
+      - app.worker
+    volumes:
+      # 读取原件、写入解析/分块产物
+      - ${STORAGE_HOST_DIR:-./storage}:/data/storage
+    depends_on:
+      postgres:
+        condition: service_healthy
+      embedder:
+        condition: service_healthy
+    healthcheck:
+      # worker 非 HTTP 服务：检查心跳文件新鲜度（主循环每秒 touch 一次）
+      test: ["CMD-SHELL", "test $(( $(date +%s) - $(stat -c %Y /tmp/worker-heartbeat 2>/dev/null || echo 0) )) -lt 90"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 4g
+          cpus: "4.0"
+
+  api:
+    # 业务镜像不含 torch；解析已由 worker 承担，内存配额相应下调
+    build:
+      context: .
+      dockerfile: Dockerfile.api
     image: ${RAG_API_IMAGE:-pdf-rag-api:local}
     container_name: rag-api
     restart: unless-stopped
@@ -94,27 +216,33 @@ services:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       QDRANT_URL: http://qdrant:6333
       LLM_BASE_URL: http://vllm:8000/v1
+      EMBEDDING_API_URL: http://embedder:8001/v1
+      RERANKER_API_URL: http://reranker:8002/v1
       STORAGE_DIR: /data/storage
-      HF_HOME: /models
     ports:
       - "${API_PORT:-8080}:8080"
     volumes:
+      # PDF 与解析产物直接落在宿主机目录，不进 Docker 卷；api 已不含模型代码
       - ${STORAGE_HOST_DIR:-./storage}:/data/storage
-      - ${HF_CACHE_DIR:-./data/huggingface}:/models
     depends_on:
       postgres:
         condition: service_healthy
       qdrant:
         condition: service_started
+      embedder:
+        condition: service_healthy
+      reranker:
+        condition: service_healthy
     deploy:
       resources:
         limits:
-          memory: 6g
-          cpus: "4.0"
-        reservations:
           memory: 2g
+          cpus: "2.0"
+        reservations:
+          memory: 1g
 
 volumes:
+  # 数据库与向量库二进制数据保留命名卷（Windows/跨平台 bind mount 有
+  # fsync/mmap 兼容风险）；模型缓存与 PDF 存储均为宿主机目录挂载
   postgres_data:
   qdrant_data:
-  huggingface_cache:

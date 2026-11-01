@@ -147,5 +147,10 @@ class IngestJob(Base):
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # 队列租约：worker 认领时间，心跳续期；超时未续期则由 worker 重新入队
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
-    __table_args__ = (Index("idx_jobs_doc", "document_id"),)
+    __table_args__ = (
+        Index("idx_jobs_doc", "document_id"),
+        Index("idx_jobs_status", "status", "started_at"),
+    )

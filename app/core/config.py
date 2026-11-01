@@ -40,14 +40,23 @@ class Settings(BaseSettings):
     llm_temperature: float = 0.1
     llm_max_tokens: int = 1024
 
-    # Embedding / Reranker 默认放 CPU，避免与 LLM 争抢 8GB 显存
+    # Embedding / Reranker 均为独立服务（compose 内覆盖为 embedder:8001 / reranker:8002），
+    # 模型加载与推理由服务端负责；api 容器只保留业务逻辑
     hf_endpoint: str = "https://hf-mirror.com"
     hf_hub_offline: int = 0
     embedding_model: str = "BAAI/bge-m3"
+    embedding_api_url: str = "http://localhost:8001/v1"
+    # 本地 embedder 留空；切换云端 OpenAI 兼容服务时填 key
+    embedding_api_key: str = ""
     embedding_device: str = "cpu"
     embedding_batch_size: int = 8
 
-    reranker_enabled: bool = True
+    # 78 题消融结论：hybrid 检索已把目标排进 top-5，rerank 净效果≈0（+1 题）
+    # 而单次精排 ~3.6s；默认关闭，需要时经 .env 或前端勾选开启
+    reranker_enabled: bool = False
+    reranker_api_url: str = "http://localhost:8002/v1"
+    # 本地 reranker 留空；切换云端 Cohere 兼容服务时填 key
+    reranker_api_key: str = ""
     reranker_model: str = "BAAI/bge-reranker-base"
     reranker_device: str = "cpu"
     reranker_max_length: int = 512

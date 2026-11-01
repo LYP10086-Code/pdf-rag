@@ -45,7 +45,8 @@ PDF 文件
   │     extract_box_supplements → 提示框补充块（kind=box）
   │     面包屑(breadcrumb) / embed_text（【面包屑】+正文）/ content_hash
   │
-  └─⑨ 入库：子块+补充块 → BGE-M3 向量 → Qdrant；父块 → PostgreSQL
+  └─⑨ 入库：子块+补充块 → BGE-M3 向量（经 embedder 服务）→ Qdrant；父块 → PostgreSQL
+       （本管线在独立 worker 容器内执行，任务经 Postgres 队列认领）
 ```
 
 ---
@@ -191,14 +192,22 @@ PDF 文件
 ## 5. 检索侧衔接（摘要）
 
 - 混合检索：BM25（CJK 二元组，应用内缓存）+ Qdrant 向量 → 加权 RRF
-  （BM25 0.2 / 向量 1.0，k=60）→ BGE 重排 → 父块归并（`merge_parents`）；
+  （BM25 0.2 / 向量 1.0，k=60）→ BGE 重排（可选，默认关闭，经独立 reranker
+  服务的 Cohere 兼容 /v1/rerank）→ 父块归并（`merge_parents`）；
 - 上下文预算：多命中共享 2500 字符，父块超预算的条目降级为子块文本；
 - 提示框补充块与主块同索引、同检索流，靠 `kind=box` 与面包屑末端的框类型词
   提供细粒度命中入口；
 - **评测基准**：`tests/testset.json`（78 题，L1 章节命中 / L2 页码命中 /
   L3 目标块精确命中三级判定，targets 为 主块+box 双粒度）。评测脚本比较
   breadcrumb 时需剥去文档标题前缀（见该文件 meta.适配说明）。floor-merge
-  等调优项必须以该评测集的基线结果为准。
+  等调优项必须以该评测集的基线结果为准。跑器：`tests/eval_run.py`（基线）、
+  `tests/eval_compare.py`（rerank × 父块归并消融）；
+- **消融结论（78 题，k=5）**：直接检索 L3 96.2%，加 rerank 97.4%（修复 Q2/Q17、
+  丢 Q26，净 +1 题，代价 +3.6s/查询）；父块归并 L1/L2/目标页码覆盖均 100%。
+  rerank 默认关闭（检索页可勾选），归并默认开启；
+- **入库编排**：api 上传/重入库只写 `ingest_jobs` 行（queued），独立 worker
+  容器以 `FOR UPDATE SKIP LOCKED` 认领执行本管线，`claimed_at` 租约心跳，
+  超时自动重排回队列——api 重建不影响进行中的入库任务。
 
 ---
 
@@ -233,7 +242,8 @@ PDF 文件
 | 父块分布 | 422 个：median 164 字符、57% <200（导语碎片）、>2500 仅 3 个 |
 | 面包屑层级 | `秦PLUS EV 用户手册 > 7 发生故障时 > 7-1 发生故障时 > 如果智能钥匙电池电量耗尽 > 注意`（h1 章由章号映射补链） |
 | 全书分块 | 422 fragment → **215 父块**（floor-merge 123 组合并）/ 738 子块 / 174 补充块；p274 框块恰好 4 条框内提示，正文零混入 |
-| 评测基线 | 78 题（`tests/testset.json`，targets 已按 evidence 锚定校准到当前 schema）：**L1 98.7% / L2 98.7% / L3 97.4%**（k=5，原始子块命中）；未命中 Q34（检索 miss）、Q26（证据块未进 top5） |
+| 评测基线 | 78 题（`tests/testset.json`，targets 已按 evidence 锚定校准到当前 schema）：**L1 98.7% / L2 98.7% / L3 96.2%～97.4%**（k=5，原始子块命中；L3 区间为无重排～有重排）；未命中 Q34（检索 miss）、Q26（证据块未进 top5，rerank 关时命中） |
+| rerank × 归并消融 | rerank：L1/L2 零变化、L3 净 +1（75→76）、检索耗时 82ms→3684ms；归并：L1/L2/目标页码覆盖 100%（唯一救回 Q34 的配置），L3 29/78 为粒度错位非漏检（父块页码覆盖 78/78）；rerank+归并叠加会重新丢 Q34 —— 据此 rerank 默认关闭 |
 | 线上回归 | 镜像重建 + 重新入库后：步骤型查询命中主块（rerank 0.997），框型查询命中合并 box 块（61-62，rerank 0.968） |
 
 ---

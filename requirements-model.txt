@@ -1,0 +1,14 @@
+# 模型服务依赖（Dockerfile.model 专用；与 api 镜像依赖集分离）
+# 本地直跑 app/embedder_server.py 或 app/reranker_server.py 时安装这份
+
+# Web
+fastapi>=0.115
+uvicorn[standard]>=0.30
+
+# 配置
+pydantic-settings>=2.4
+python-dotenv>=1.0
+
+# 嵌入 / 重排（CPU）；torch 建议先按 CPU 源安装，见 Dockerfile.model
+sentence-transformers>=3.0
+torch>=2.2

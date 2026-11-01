@@ -7,6 +7,7 @@ export default function SearchPanel({ docs, onError }) {
   const [query, setQuery] = useState("首次保养在什么时候进行");
   const [k, setK] = useState(5);
   const [mergeParents, setMergeParents] = useState(true);
+  const [useRerank, setUseRerank] = useState(false);
   const [debug, setDebug] = useState(false);
   const [busy, setBusy] = useState(false);
   const [res, setRes] = useState(null);
@@ -21,6 +22,7 @@ export default function SearchPanel({ docs, onError }) {
         query: query.trim(),
         k: Number(k),
         merge_parents: mergeParents,
+        use_reranker: useRerank,
       };
       if (docId !== "__all__") payload.document_ids = [docId];
       const data = await api.searchAll(payload, debug);
@@ -38,7 +40,7 @@ export default function SearchPanel({ docs, onError }) {
         <div>
           <h2>检索测试</h2>
           <p className="muted">
-            混合检索（BM25 + 向量 RRF）→ 可选父块归并 → BGE Reranker 精排；只检索不生成答案。
+            混合检索（BM25 + 向量 RRF）→ 可选父块归并 → 可选 Reranker 精排；只检索不生成答案。
           </p>
         </div>
       </div>
@@ -85,6 +87,15 @@ export default function SearchPanel({ docs, onError }) {
             <option value="parent">父块（归并）</option>
             <option value="child">子块（原始命中）</option>
           </select>
+        </label>
+
+        <label className="field check">
+          <input
+            type="checkbox"
+            checked={useRerank}
+            onChange={(e) => setUseRerank(e.target.checked)}
+          />
+          <span>Rerank 精排（较慢）</span>
         </label>
 
         <label className="field check">

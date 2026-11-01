@@ -60,7 +60,21 @@ def session_scope() -> Iterator[Session]:
 
 
 def init_db() -> None:
-    """建表。表结构以 models 为准，启动时幂等执行。"""
+    """建表 + 幂等迁移。表结构以 models 为准，启动时幂等执行。"""
     from app.core import models  # noqa: F401  确保模型已注册到 Base.metadata
 
     Base.metadata.create_all(get_engine())
+    _migrate()
+
+
+def _migrate() -> None:
+    """create_all 不会改动已存在的表，这里补充历史库的增量列/索引。"""
+    from sqlalchemy import text
+
+    statements = (
+        "ALTER TABLE ingest_jobs ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMPTZ",
+        "CREATE INDEX IF NOT EXISTS idx_jobs_status ON ingest_jobs (status, started_at)",
+    )
+    with get_engine().begin() as conn:
+        for statement in statements:
+            conn.execute(text(statement))
