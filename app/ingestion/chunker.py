@@ -33,7 +33,9 @@ TABLE_SEP_RE = re.compile(r"\|(?:\s*:?-{3,}:?\s*\|)+")
 TABLE_PAGES_RE = re.compile(r"表格（跨第(\d+)至(\d+)页）")
 
 BOX_TITLE_LINE_RE = re.compile(r"^\s*(警告|注意|温馨提示)(\s*[(（]\s*续\s*[)）])?\s*$")
-SUPPLEMENT_MAX_CHARS = 6000
+# ">" 引用块：解析层提示框几何检测写入的确定性边界标记
+BOX_MARK_RE = re.compile(r"^[ \t]*>[ \t]?")
+BOX_CONT_RE = re.compile(r"^\s*(警告|注意|温馨提示)\s*[(（]\s*续\s*[)）]\s*$")
 
 _NORM_KEEP = re.compile(r"[0-9A-Za-z\u4e00-\u9fff]")
 
@@ -58,10 +60,10 @@ def merge_pages(pages: list[dict]) -> str:
         page_no = int(page["page_number"])
         if prev_page is not None:
             for missing in range(prev_page + 1, page_no):
-                out += f"@@E{missing}@@"
+                out += f"\n@@E{missing}@@"
         part = page["text"].strip()
         if part:
-            starts_block = part.startswith(("#", "-", "|", "•")) or re.match(
+            starts_block = part.startswith(("#", "-", "|", "•", ">")) or re.match(
                 r"^\d+[.、]", part
             )
             if not out:
@@ -71,7 +73,11 @@ def merge_pages(pages: list[dict]) -> str:
             else:
                 out += part
             prev_char = part[-1]
-        out += f"@@E{page_no}@@"
+        # 页尾标记跟随本页内容（跨页断句剥标记后保持连续）；仅当末行是标题时
+        # 标记独立成行——否则会粘进 MarkdownHeaderTextSplitter 的标题元数据
+        # （breadcrumb 出现 "@@E220@@" 污染）
+        glue = "\n" if part.split("\n")[-1].lstrip().startswith("#") else ""
+        out += f"{glue}@@E{page_no}@@"
         prev_page = page_no
     return out
 
@@ -115,7 +121,18 @@ def clean_fragment_text(text: str) -> str:
     clean = END_MARKER_RE.sub("", text)
     clean = START_TAIL_RE.sub("", clean)
     clean = END_TAIL_RE.sub("", clean)
+    clean = strip_box_marks(clean)
     return re.sub(r"\n{3,}", "\n\n", clean).strip()
+
+
+def strip_box_marks(text: str) -> str:
+    """剥掉行首 ">" 引用标记（解析层提示框边界），还原干净文本。"""
+    return re.sub(r"(?m)^[ \t]*>[ \t]?", "", text)
+
+
+def _unmarked_box_line(line: str) -> str:
+    """供标题匹配：剥掉行首 ">" 引用标记后的行内容。"""
+    return BOX_MARK_RE.sub("", line, count=1)
 
 
 def build_breadcrumb(headings: dict, document_title: str = "") -> str:
@@ -276,44 +293,106 @@ def extract_box_supplements(
 ) -> list[dict]:
     """提示框补充块（multi-representation indexing）：警告类查询的独立入口。
 
-    主块仍保留提示框与上下文；这里额外抽取主题纯度更高的检索副本，
+    边界判定：
+    - 标记模式（解析层几何检测已写入 ">"）：框 = 连续 ">" 行，遇到首个非引用
+      非空行或下一个框标题即结束——确定性，正文不可能被吸入；
+    - 回退模式（无任何 ">" 标记，如检测关闭或未命中）：沿用旧启发式——扫描到
+      下一个 markdown 标题或下一个框标题为止。
+    跨页续框拼接：标题带"（续）"是排版的显式续接信号，无条件并入 fragment 内
+    最近的同类型框（警告/注意/温馨提示按基础词匹配），中间隔有的正文留在主块。
+
     与父块共享 parent_key，命中后按 key 取回完整 fragment。
     """
     lines = frag_text.split("\n")
     frag_norm = norm_text(END_MARKER_RE.sub("", frag_text))
-    box_starts = [i for i, line in enumerate(lines) if BOX_TITLE_LINE_RE.match(line)]
+    marked_mode = any(BOX_MARK_RE.match(line) for line in lines)
+    box_starts = [
+        i for i, line in enumerate(lines)
+        if BOX_TITLE_LINE_RE.match(_unmarked_box_line(line).strip())
+    ]
     if not box_starts:
         return []
 
-    out: list[dict] = []
+    # 收集候选框：标题行 + 体部行（保留原始顺序）
+    boxes: list[dict] = []
     for start in box_starts:
-        title = lines[start].strip()
+        title = _unmarked_box_line(lines[start]).strip()
+        base_match = re.match(r"^\s*(警告|注意|温馨提示)", title)
         end = len(lines)
         for index in range(start + 1, len(lines)):
             stripped = lines[index].strip()
-            if stripped.startswith("#") or BOX_TITLE_LINE_RE.match(stripped):
+            if not stripped:
+                continue  # 空行不终止
+            if marked_mode:
+                # 确定性边界：非 ">" 行，或下一个框标题行（框几何上互不重叠，
+                # 标题行意味着上一框已结束——防止边界扫描穿过同页的后续框）
+                if not BOX_MARK_RE.match(stripped) or BOX_TITLE_LINE_RE.match(
+                    _unmarked_box_line(stripped).strip()
+                ):
+                    end = index
+                    break
+            elif stripped.startswith("#") or BOX_TITLE_LINE_RE.match(stripped):
                 end = index
                 break
-        raw = "\n".join(lines[start:end])
-        if len(norm_text(raw)) >= 0.95 * len(frag_norm) > 0:
+        body = [_unmarked_box_line(line) for line in lines[start + 1 : end]]
+        boxes.append(
+            {
+                "start": start,
+                "end": end,
+                "title": title,
+                "base": base_match.group(1) if base_match else title,
+                "body": body,
+            }
+        )
+
+    # 跨页续框拼接：标题带（续）= 排版的显式续接信号，并入 fragment 内最近的
+    # 同类型框（即使两半之间隔有正文——正文留在主块，不进框块）
+    merged: list[dict] = []
+    for box in boxes:
+        if BOX_CONT_RE.match(box["title"]):
+            target = next(
+                (m for m in reversed(merged) if m["base"] == box["base"]), None
+            )
+            if target is not None:
+                target["body"].extend(box["body"])
+                target["end"] = box["end"]
+                continue
+        merged.append(box)
+
+    out: list[dict] = []
+    for box in merged:
+        raw = "\n".join([box["title"], *box["body"]])
+        if len(norm_text(END_MARKER_RE.sub("", raw))) >= 0.95 * len(frag_norm) > 0:
             continue  # 整个 fragment 就是一个框，避免与主块重复
 
         text = END_MARKER_RE.sub("", raw)
         text = START_TAIL_RE.sub("", text)
         text = END_TAIL_RE.sub("", text)
-        text = re.sub(r"[ \t]+\n", "\n", text).strip()
+        text = re.sub(r"[ \t]+\n", "\n", text)
+        text = re.sub(r"\n{3,}", "\n\n", text).strip()
         if len(norm_text(text)) < 4:
             continue
 
-        pages = page_for(sum(len(line) + 1 for line in lines[:start]))
-        box_headings = {**headings, "h6": title}
+        start_offset = sum(len(line) + 1 for line in lines[: box["start"]])
+        pages = page_for(start_offset)
+        # 跨页续框拼接后，用框内最后一行的位置扩展页码范围（引用溯源显示 30-31）；
+        # 不能用框结束位置——那已是框外第一行，落在次页时会把页码多标一页
+        if box["body"] and pages:
+            last_line_offset = sum(len(line) + 1 for line in lines[: box["end"] - 1])
+            end_pages = page_for(last_line_offset)
+            if end_pages and end_pages[-1] > pages[-1]:
+                pages = list(range(pages[0], end_pages[-1] + 1))
+        elif not pages:
+            end_pages = page_for(sum(len(line) + 1 for line in lines[: box["end"]]))
+            pages = pages or end_pages
+        box_headings = {**headings, "h6": box["title"]}
         breadcrumb = build_breadcrumb(box_headings, document_title)
         title_line, _, body = text.partition("\n")
 
         pieces = [body]
-        if len(text) > SUPPLEMENT_MAX_CHARS:
+        if len(text) > settings.supplement_max_chars:
             splitter = RecursiveCharacterTextSplitter(
-                chunk_size=SUPPLEMENT_MAX_CHARS,
+                chunk_size=settings.supplement_max_chars,
                 chunk_overlap=settings.chunk_overlap,
                 separators=["\n\n", "\n", "。", " ", ""],
             )
@@ -438,6 +517,7 @@ def build_chunks(
         fragment_pages: set[int] = set()
         for kind, piece in split_fragment_text(fragment.page_content, size_splitter):
             pages, text = resolve_pages(piece)
+            text = strip_box_marks(text)
             if not text:
                 continue
             pages_string = _pages_string(pages)

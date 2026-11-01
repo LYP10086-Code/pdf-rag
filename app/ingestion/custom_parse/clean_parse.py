@@ -18,6 +18,8 @@ import re
 
 import pymupdf
 
+from app.core.config import settings
+from app.ingestion.custom_parse import box_regions
 from app.ingestion.custom_parse.style_headings import build_heading_index, norm_text
 from app.ingestion.custom_parse.table_parse import (
     replace_tables_in_page,
@@ -312,11 +314,31 @@ def detect_structure(doc: pymupdf.Document):
     return titles, heading_index, chapter_map
 
 
+def _section_already_headed(body: str, title: str) -> bool:
+    """章扉页保护：页面首个非空行若是与节标题同文的 h1 标题则不重复注入。
+
+    章扉页的页眉带节标题常与 18pt 章标题同文（如"1 安全"），直接注入会
+    产生 h1/h2 同名，面包屑出现"1 安全 > 1 安全"。
+    """
+    target = norm_text(title)
+    if not target:
+        return True
+    for line in body.split("\n")[:3]:  # 章扉页大标题位于页首
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("#"):
+            return norm_text(stripped.lstrip("#")) == target
+        break
+    return False
+
+
 def clean_pages(
     md_chunks: list[dict],
     titles: list[str],
     heading_index: dict,
     doc: pymupdf.Document | None = None,
+    chapter_map: dict[int, str] | None = None,
 ):
     """逐页清洗 + 标题注入 + 剔除目录页与其前部材料，返回 (记录, 统计)。
 
@@ -344,7 +366,10 @@ def clean_pages(
     records: list[dict] = []
     table_registry = []
     last_table = None
-    n_noise = n_front = n_injected = n_detected = 0
+    n_noise = n_front = n_injected = n_detected = n_box_marked = n_box_total = 0
+    last_section = ""
+    last_chapter = ""
+    n_h2_injected = 0
     for chunk, title in zip(md_chunks, titles):
         page_no = chunk["page_number"]
         if truncate_below is not None and page_no < truncate_below:
@@ -370,9 +395,31 @@ def clean_pages(
         injected, matched, total = inject_headings(cleaned, heading_index.get(page_no, []))
         n_injected += matched
         n_detected += total
+        # 提示框几何检测：框内行包 ">" 引用块（分块层确定性定界的依据）
+        if doc is not None:
+            regions = box_regions.detect_box_regions(doc[page_no - 1])
+            injected, box_marked, box_total = box_regions.mark_box_lines(injected, regions)
+            n_box_marked += box_marked
+            n_box_total += box_total
         body = strip_icon_bullets(injected)
         if not body:
             continue
+        # h2 节级注入：页眉带章节标题（前向填充）在切换页首注入 ## 行，
+        # 使 fragment/面包屑携带 章 > 节 完整层级（与评测集 schema 对齐）。
+        # h1 章级由主目录的 章号→章名 映射重建：章扉页因迷你目录常被整页
+        # 剔除，扉页上的 18pt # 章名随之丢失，故按节标题章号查表补链。
+        if title and title != last_section and not _section_already_headed(body, title):
+            prefix_lines = []
+            chap_match = re.match(r"^(\d+)(?=[-－\s])", title)
+            chapter_name = (chapter_map or {}).get(int(chap_match.group(1))) if chap_match else None
+            if chapter_name and chapter_name != last_chapter and chapter_name != title:
+                prefix_lines.append(f"# {chapter_name}")
+                last_chapter = chapter_name
+            prefix_lines.append(f"## {title}")
+            body = "\n".join(prefix_lines) + f"\n{body}"
+            n_h2_injected += 1
+        if title:
+            last_section = title
         records.append({"page": page_no, "section": title, "text": body})
 
     # 全书处理完再替换占位符：跨页表的后续行此时已并入同一 Table 对象
@@ -386,6 +433,9 @@ def clean_pages(
         "front_cutoff": truncate_below,
         "n_injected": n_injected,
         "n_detected": n_detected,
+        "n_box_lines_marked": n_box_marked,
+        "n_box_lines_total": n_box_total,
+        "n_h2_injected": n_h2_injected,
         "n_chars": sum(len(r["text"]) for r in records),
         "n_records": len(records),
         "n_tables": len(table_registry),

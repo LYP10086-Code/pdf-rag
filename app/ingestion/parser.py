@@ -62,7 +62,7 @@ def parse_pdf(
 def _parse_with_custom(pdf_path: Path) -> ParsedDocument:
     with pymupdf.open(str(pdf_path)) as doc:
         page_count = len(doc)
-        titles, heading_index, _chapter_map = detect_structure(doc)
+        titles, heading_index, chapter_map = detect_structure(doc)
         raw = pymupdf4llm.to_markdown(
             doc,
             page_chunks=True,
@@ -71,7 +71,7 @@ def _parse_with_custom(pdf_path: Path) -> ParsedDocument:
             show_progress=False,
         )
         records, stats = clean_pages(
-            slim_chunks(raw), titles, heading_index, doc=doc
+            slim_chunks(raw), titles, heading_index, doc=doc, chapter_map=chapter_map
         )
 
     if not records:

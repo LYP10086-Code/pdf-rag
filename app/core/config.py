@@ -63,6 +63,21 @@ class Settings(BaseSettings):
     # 分块参数
     chunk_size: int = 500
     chunk_overlap: int = 50
+    # 提示框补充块超长时的再切分上限
+    supplement_max_chars: int = 6000
+
+    # 提示框几何检测（物理签名，按 PDF 模板调整；默认值为秦PLUS EV 手册实测，
+    # 全书 302 页验证：184 个标题条 100% 命中、0 例框内表格、2 例跨页框）
+    # 关闭后提示框补充块退回文本启发式定界（旧行为）
+    box_detect_enabled: bool = True
+    box_bar_fill_hex: str = "#ffe3bf"
+    box_color_tolerance: float = 0.02
+    box_bar_min_width_pt: int = 300
+    box_bar_max_width_pt: int = 380
+    box_bar_min_height_pt: int = 18
+    box_bar_max_height_pt: int = 32
+    box_bottom_search_pt: int = 400
+    box_x_tolerance_pt: int = 5
 
     # PDF 解析：项目自研解析链路（标题物理探测 + 表格重建 + 清洗）
     pdf_parser: str = "custom"
