@@ -95,7 +95,176 @@ pdf-rag/
 └── README.md
 ```
 
+## 从 GitHub 下载并在 Linux 上运行
+
+这一节只讲一个最直接的流程：在一台 Linux 机器上，从 GitHub 下载代码，配置 `.env`，启动全部 Docker 服务，然后打开前端测试。
+
+### 1. 准备机器
+
+- Linux x86_64（示例使用 Ubuntu 24.04）
+- 磁盘建议 40GB 以上，vLLM 镜像较大
+- 如果要使用问答功能：NVIDIA GPU + 驱动 + NVIDIA Container Toolkit
+- 如果没有 GPU：仍然可以启动前端、文档入库和检索，但问答需要接外部 LLM，见第 9 步
+
+### 2. 安装 Docker（如果有则跳过）
+
+```bash
+curl -fsSL https://get.docker.com | sudo sh
+sudo usermod -aG docker $USER
+newgrp docker
+
+docker --version
+docker compose version
+```
+
+`newgrp docker` 之后当前终端会进入 docker 组；如果仍提示权限不足，重新登录服务器再试。
+
+### 3. 从 GitHub 下载代码
+
+```bash
+git clone https://github.com/LYP10086-Code/pdf-rag.git
+cd pdf-rag
+```
+
+如果没有 git：
+
+```bash
+sudo apt update && sudo apt install -y git
+```
+
+也可以直接从 GitHub 页面下载 ZIP 后解压。
+
+### 4. 配置 `.env`
+
+```bash
+cp .env.example .env
+nano .env
+```
+
+至少修改数据库密码，并保持 `DATABASE_URL` 中的密码一致：
+
+```env
+POSTGRES_USER=raguser
+POSTGRES_PASSWORD=your-strong-password
+POSTGRES_DB=ragdb
+DATABASE_URL=postgresql+psycopg://raguser:your-strong-password@localhost:5432/ragdb
+
+RAG_API_IMAGE=pdf-rag-api:local
+API_PORT=8080
+STORAGE_HOST_DIR=./storage
+HF_CACHE_DIR=./data/huggingface
+```
+
+不用改 `RAG_API_IMAGE`，本流程会在本机构建 `pdf-rag-api:local` 镜像。
+
+创建数据目录：
+
+```bash
+mkdir -p storage data/huggingface
+sudo chown -R 1000:1000 storage data/huggingface
+```
+
+容器内 API 使用 UID 1000，目录需要对 UID 1000 可写。
+
+> 项目内路径适合快速跑通和日常使用。如果是长期运行的服务器，建议把数据挪到独立目录（如 `/var/lib/pdf-rag/storage`、`/var/lib/pdf-rag/models`），避免清理仓库时误删数据：改 `.env` 里这两个变量、`mkdir -p` 并 `chown -R 1000:1000` 即可，其余步骤不变。不要把这两个目录放在 NFS 挂载或 WSL 的 `/mnt/c/...` 下。
+
+### 5. 启动全部服务
+
+```bash
+docker compose up -d --build
+```
+
+这条命令会：
+
+1. 构建 `rag-api` 镜像（后端 + 前端）
+2. 拉取 PostgreSQL、Qdrant、vLLM 镜像
+3. 创建网络、数据卷和四个容器
+
+首次构建和拉取需要下载依赖，之后会复用缓存。
+
+### 6. 等待并检查
+
+```bash
+docker compose ps
+docker compose logs -f api
+```
+
+等待 `rag-api` 显示 `healthy`。vLLM 首次启动要加载或下载 Qwen 模型，可能比 API 慢。
+
+### 7. 打开前端
+
+在 Linux 本机浏览器打开：
+
+- 前端：http://localhost:8080/
+- 接口文档：http://localhost:8080/docs
+- 健康检查：http://localhost:8080/api/health
+
+如果从 Windows 或其他机器访问：
+
+```text
+http://服务器IP:8080/
+```
+
+或者先建立 SSH 隧道：
+
+```bash
+ssh -L 8080:localhost:8080 user@server
+```
+
+然后在本地浏览器打开 `http://localhost:8080/`。
+
+### 8. 第一次使用
+
+1. 打开前端「文档管理」，上传一个 PDF
+2. 等待文档状态变成 `ready`
+3. 打开「检索测试」或「Agent 问答」，输入问题
+4. 首次检索会下载 BGE-M3 和 Reranker，需要网络
+
+### 9. 没有 GPU 时
+
+vLLM 需要 NVIDIA GPU。没有 GPU 时只启动 API 和基础依赖：
+
+```bash
+docker compose up -d --build postgres qdrant api
+```
+
+此时前端、文档入库和检索可用；问答需要外部 LLM：
+
+编辑 `docker-compose.yml`，把 `api.environment.LLM_BASE_URL` 改成外部 OpenAI 兼容服务地址。`.env` 里的 `LLM_BASE_URL` 会被 compose 覆盖，所以改 `.env` 不生效。
+
+### 10. 停止、更新与重新启动
+
+```bash
+docker compose stop       # 停止全部容器
+docker compose down       # 停止并删除容器，保留数据卷
+docker compose down -v    # 连数据卷一起删除，慎用
+```
+
+更新代码后重新构建：
+
+```bash
+git pull
+docker compose up -d --build
+```
+
+只更新 API：
+
+```bash
+docker compose up -d --build --no-deps --force-recreate api
+```
+
+### 11. 常见问题
+
+- `permission denied`：重新登录服务器，或临时用 `sudo docker compose ...`
+- 8080 被占用：修改 `.env` 的 `API_PORT`
+- `rag-api` 一直不 healthy：看 `docker compose logs api`
+- vLLM 启动失败：检查 `nvidia-smi` 和 NVIDIA Container Toolkit
+- 模型下载慢：设置 `HF_ENDPOINT`，或提前拷贝模型缓存
+- 端口不要直接暴露公网：API 目前没有鉴权，建议用 SSH 隧道或反向代理
+
 ## 快速开始
+
+> 以下是不使用 Docker 的本地开发流程；日常启动请优先使用上面的「从 GitHub 下载并在 Linux 上运行」。
 
 ### 1. 前置条件
 
@@ -109,7 +278,8 @@ pdf-rag/
 
 ```bash
 cd ~/projects/pdf-rag
-cp .env.example .env
+# 仅首次运行：已有 .env 时跳过，避免覆盖密码
+[ -f .env ] || cp .env.example .env
 # 编辑 .env：修改 POSTGRES_PASSWORD，并同步 DATABASE_URL 中的密码
 docker compose up -d postgres qdrant
 docker compose ps
@@ -273,7 +443,7 @@ docker compose pull api
 docker compose up -d --no-deps --force-recreate api
 ```
 
-`docker login` 需要带 `read:packages` 的 PAT；GHCR 包默认私有，也可以在包设置里改为公开。WSL 钩子优先拉取 GHCR 镜像，拉取失败时回退本地构建。
+当前 GHCR 包可匿名拉取，不需要 `docker login`；如果以后改为私有，PAT 需要带 `read:packages`。WSL 钩子优先拉取 GHCR 镜像，拉取失败时回退本地构建。
 
 ### 查看与停止
 
