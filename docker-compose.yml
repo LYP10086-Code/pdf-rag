@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: postgres:16
+    image: docker.io/library/postgres:16
     container_name: rag-postgres
     restart: unless-stopped
     environment:
@@ -16,9 +16,14 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+          cpus: "2.0"
 
   qdrant:
-    image: qdrant/qdrant:latest
+    image: docker.io/qdrant/qdrant:v1.20.0
     container_name: rag-qdrant
     restart: unless-stopped
     ports:
@@ -26,9 +31,14 @@ services:
       - "6334:6334"
     volumes:
       - qdrant_data:/qdrant/storage
+    deploy:
+      resources:
+        limits:
+          memory: 4g
+          cpus: "2.0"
 
   vllm:
-    image: vllm/vllm-openai:latest
+    image: docker.io/vllm/vllm-openai:v0.32.0
     container_name: rag-vllm
     restart: unless-stopped
     ipc: host
@@ -62,6 +72,9 @@ services:
       - hermes
     deploy:
       resources:
+        limits:
+          memory: 8g
+          cpus: "4.0"
         reservations:
           devices:
             - driver: nvidia
@@ -93,6 +106,13 @@ services:
         condition: service_healthy
       qdrant:
         condition: service_started
+    deploy:
+      resources:
+        limits:
+          memory: 6g
+          cpus: "4.0"
+        reservations:
+          memory: 2g
 
 volumes:
   postgres_data:
