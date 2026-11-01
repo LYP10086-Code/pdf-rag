@@ -485,69 +485,107 @@ def build_chunks(
             locate_hint = pages[-1]
         return pages, text
 
-    for fragment_index, fragment in enumerate(fragments):
-        headings = {
+    def _fragment_headings(fragment) -> dict:
+        return {
             key: value
             for key, value in fragment.metadata.items()
             if key in ("h1", "h2", "h3", "h4", "h5", "h6")
         }
-        breadcrumb = build_breadcrumb(headings, document_title)
-        section = headings.get("h2") or headings.get("h1") or ""
-        parent_key = f"{document_id}:p{fragment_index}"
 
-        if parsed.page_aligned:
-            page_resolver = lambda pos, text=fragment.page_content: _marker_page(  # noqa: E731
-                text, pos, cur_page
-            )
-        else:
-            page_resolver = lambda pos, text=fragment.page_content: _locator_page(  # noqa: E731
-                text, locator, locate_hint
-            )
-
-        supplements.extend(
-            extract_box_supplements(
-                fragment.page_content,
-                headings=headings,
-                document_title=document_title,
-                parent_key=parent_key,
-                page_for=page_resolver,
-            )
+    # floor-merge 下限聚合：小碎片父块（<floor）与同章同节内相邻碎片合并，
+    # 合并后不超 ceiling；子块/框块面包屑保持各自 fragment 的具体层级，
+    # 父块面包屑取组内首个 fragment（合并时 LLM 仍可见组内全部标题结构）
+    groups: list[dict] = []
+    for index, fragment in enumerate(fragments):
+        heads = _fragment_headings(fragment)
+        size = len(clean_fragment_text(fragment.page_content))
+        current = groups[-1] if groups else None
+        mergeable = (
+            settings.parent_merge_enabled
+            and current is not None
+            and current["size"] < settings.parent_merge_floor_chars
+            and current["size"] + size <= settings.parent_merge_ceiling_chars
+            and (current["heads"].get("h1"), current["heads"].get("h2"))
+            == (heads.get("h1"), heads.get("h2"))
         )
+        if mergeable:
+            current["indices"].append(index)
+            current["size"] += size
+        else:
+            groups.append({"indices": [index], "size": size, "heads": heads})
 
-        fragment_pages: set[int] = set()
-        for kind, piece in split_fragment_text(fragment.page_content, size_splitter):
-            pages, text = resolve_pages(piece)
-            text = strip_box_marks(text)
-            if not text:
-                continue
-            pages_string = _pages_string(pages)
-            if kind == "table":
-                match = TABLE_PAGES_RE.search(text)
-                if match:
-                    pages_string = f"{match.group(1)}-{match.group(2)}"
-                stats["tables"] += 1
-            if pages:
-                fragment_pages.update(pages)
-            embed_text = (
-                f"【{breadcrumb}】\n{strip_leading_headings(text)}" if breadcrumb else text
-            )
-            chunks.append(
-                {
-                    "parent_key": parent_key,
-                    "kind": kind if kind == "table" else "main",
-                    "section": section,
-                    "pages": pages_string,
-                    "page_number": pages[0] if pages else None,
-                    "breadcrumb": breadcrumb,
-                    "text": text,
-                    "embed_text": embed_text,
-                    "content_hash": hashlib.sha256(embed_text.encode("utf-8")).hexdigest(),
-                }
+    for group_index, group in enumerate(groups):
+        group_headings = _fragment_headings(fragments[group["indices"][0]])
+        breadcrumb = build_breadcrumb(group_headings, document_title)
+        section = group_headings.get("h2") or group_headings.get("h1") or ""
+        parent_key = f"{document_id}:p{group_index}"
+        group_pages: set[int] = set()
+
+        for fragment_index in group["indices"]:
+            fragment = fragments[fragment_index]
+            headings = _fragment_headings(fragment)
+            frag_breadcrumb = build_breadcrumb(headings, document_title)
+            frag_section = headings.get("h2") or headings.get("h1") or ""
+
+            if parsed.page_aligned:
+                page_resolver = lambda pos, text=fragment.page_content: _marker_page(  # noqa: E731
+                    text, pos, cur_page
+                )
+            else:
+                page_resolver = lambda pos, text=fragment.page_content: _locator_page(  # noqa: E731
+                    text, locator, locate_hint
+                )
+
+            supplements.extend(
+                extract_box_supplements(
+                    fragment.page_content,
+                    headings=headings,
+                    document_title=document_title,
+                    parent_key=parent_key,
+                    page_for=page_resolver,
+                )
             )
 
-        parent_text = clean_fragment_text(fragment.page_content)
+            for kind, piece in split_fragment_text(fragment.page_content, size_splitter):
+                pages, text = resolve_pages(piece)
+                text = strip_box_marks(text)
+                if not text:
+                    continue
+                pages_string = _pages_string(pages)
+                if kind == "table":
+                    match = TABLE_PAGES_RE.search(text)
+                    if match:
+                        pages_string = f"{match.group(1)}-{match.group(2)}"
+                    stats["tables"] += 1
+                if pages:
+                    group_pages.update(pages)
+                embed_text = (
+                    f"【{frag_breadcrumb}】\n{strip_leading_headings(text)}"
+                    if frag_breadcrumb
+                    else text
+                )
+                chunks.append(
+                    {
+                        "parent_key": parent_key,
+                        "kind": kind if kind == "table" else "main",
+                        "section": frag_section,
+                        "pages": pages_string,
+                        "page_number": pages[0] if pages else None,
+                        "breadcrumb": frag_breadcrumb,
+                        "text": text,
+                        "embed_text": embed_text,
+                        "content_hash": hashlib.sha256(
+                            embed_text.encode("utf-8")
+                        ).hexdigest(),
+                    }
+                )
+
+        group_content = "\n\n".join(
+            fragments[i].page_content for i in group["indices"]
+        )
+        parent_text = clean_fragment_text(group_content)
         if parent_text:
-            pages_sorted = sorted(fragment_pages)
+            pages_sorted = sorted(group_pages)
             parents.append(
                 {
                     "parent_key": parent_key,
@@ -569,7 +607,14 @@ def build_chunks(
     for index, chunk in enumerate(chunks):
         chunk["chunk_index"] = index
 
-    stats.update({"chunks": len(chunks), "parents": len(parents)})
+    stats.update(
+        {
+            "chunks": len(chunks),
+            "parents": len(parents),
+            "parent_groups": len(groups),
+            "merged_groups": sum(1 for g in groups if len(g["indices"]) > 1),
+        }
+    )
     return ChunkingResult(chunks=chunks, parents=parents, stats=stats)
 
 

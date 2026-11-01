@@ -66,6 +66,12 @@ class Settings(BaseSettings):
     # 提示框补充块超长时的再切分上限
     supplement_max_chars: int = 6000
 
+    # 父块 floor-merge 下限聚合：小碎片父块（<floor）与同章同节内相邻碎片
+    # 合并，合并后不超 ceiling；breadcrumb 取组内首个 fragment 的具体层级
+    parent_merge_enabled: bool = True
+    parent_merge_floor_chars: int = 300
+    parent_merge_ceiling_chars: int = 1000
+
     # 提示框几何检测（物理签名，按 PDF 模板调整；默认值为秦PLUS EV 手册实测，
     # 全书 302 页验证：184 个标题条 100% 命中、0 例框内表格、2 例跨页框）
     # 关闭后提示框补充块退回文本启发式定界（旧行为）
