@@ -3,6 +3,9 @@ fastapi>=0.115
 uvicorn[standard]>=0.30
 python-multipart>=0.0.9
 
+# MCP：检索以 streamable HTTP 工具暴露给外部 Agent（挂载在 api 的 /mcp）
+mcp>=2.3
+
 # 配置与数据库
 pydantic-settings>=2.4
 sqlalchemy>=2.0

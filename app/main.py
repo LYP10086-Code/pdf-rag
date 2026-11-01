@@ -19,6 +19,7 @@ from app.core import qdrant
 from app.core.config import settings
 from app.core.database import init_db, session_scope
 from app.core.models import Document
+from app.mcp_server import build_mcp_asgi, mcp as mcp_server
 from app.services import document_service
 
 logging.basicConfig(
@@ -32,19 +33,26 @@ mimetypes.add_type("text/javascript", ".js")
 mimetypes.add_type("text/css", ".css")
 
 
+# MCP 子应用：模块级构建（session_manager 只有在 streamable_http_app()
+# 调用后才存在，宿主 lifespan 才能启动它）；端点 = 挂载前缀 /mcp/
+mcp_asgi = build_mcp_asgi()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    settings.ensure_dirs()
-    init_db()
-    qdrant.ensure_collection()
-    with session_scope() as db:
-        stale = document_service.recover_stale_jobs(db)
-    if stale:
-        logger.info("启动时将 %d 个中断任务标记为 failed", stale)
-    logger.info("pdf-rag 启动完成：%s", settings.app_version)
-    yield
-    document_service.shutdown()
-    qdrant.close()
+    # MCP 挂载后子应用 lifespan 不会执行，session manager 由宿主 lifespan 启动
+    async with mcp_server.session_manager.run():
+        settings.ensure_dirs()
+        init_db()
+        qdrant.ensure_collection()
+        with session_scope() as db:
+            stale = document_service.recover_stale_jobs(db)
+        if stale:
+            logger.info("启动时将 %d 个中断任务标记为 failed", stale)
+        logger.info("pdf-rag 启动完成：%s", settings.app_version)
+        yield
+        document_service.shutdown()
+        qdrant.close()
 
 
 app = FastAPI(
@@ -58,6 +66,9 @@ app = FastAPI(
 )
 app.include_router(documents_router)
 app.include_router(chat_router)
+
+# MCP：检索以标准工具协议暴露给外部 Agent（streamable HTTP）
+app.mount("/mcp", mcp_asgi, name="mcp")
 
 
 @app.get("/api/health")

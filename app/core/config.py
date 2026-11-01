@@ -105,6 +105,10 @@ class Settings(BaseSettings):
     chat_mode: str = "rag"
     agent_max_iterations: int = 3
 
+    # MCP 端点（/mcp/）的 Host 允许列表：逗号分隔，支持 host:* 通配端口；
+    # 留空关闭 DNS 重绑定校验（内网 demo 默认），公网部署建议填实际域名
+    mcp_allowed_hosts: str = ""
+
     @property
     def storage_path(self) -> Path:
         path = Path(self.storage_dir)

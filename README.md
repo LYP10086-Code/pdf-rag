@@ -59,9 +59,10 @@ Windows 11
 ```text
 pdf-rag/
 ├── app/
-│   ├── main.py                 # FastAPI 入口、健康检查、前端静态挂载
+│   ├── main.py                 # FastAPI 入口、健康检查、MCP 挂载、前端静态托管
 │   ├── embedder_server.py      # 独立嵌入服务（OpenAI 兼容 /v1/embeddings）
 │   ├── reranker_server.py      # 独立重排服务（Cohere 兼容 /v1/rerank）
+│   ├── mcp_server.py           # MCP 服务器：检索以工具形式暴露给外部 Agent
 │   ├── worker.py               # 入库队列消费者（SKIP LOCKED 认领、租约心跳）
 │   ├── api/
 │   │   ├── documents.py        # 上传、列表、详情、删除、重入库、检索
@@ -525,6 +526,7 @@ docker compose stop api
 | `RETRIEVAL_DEFAULT_K` | 默认返回条数 | `5` |
 | `HYBRID_BM25_WEIGHT` | BM25 在 RRF 中的权重 | `0.2` |
 | `CONTEXT_BUDGET_CHARS` | 生成上下文预算 | `2500` |
+| `MCP_ALLOWED_HOSTS` | `/mcp/` 的 Host 允许列表（逗号分隔，`host:*` 通配端口；留空关闭校验） | 空 |
 | `HF_ENDPOINT` | Hugging Face 镜像 | `https://hf-mirror.com` |
 
 不要提交真实 `.env`，仓库只保留 `.env.example`。
@@ -543,6 +545,7 @@ docker compose stop api
 | POST | `/api/search` | 全库 / 指定文档检索 |
 | POST | `/api/documents/{id}/search` | 单文档检索 |
 | POST | `/api/chat` | RAG 问答，`mode=rag` 为固定单轮链路 |
+| MCP | `/mcp/` | streamable HTTP 端点：`search_knowledge_base` 工具，供外部 Agent 调用 |
 
 上传与问答示例：
 
@@ -555,6 +558,28 @@ curl -X POST http://localhost:8080/api/chat \
 ```
 
 问答响应包含 `answer`、`citations`（文档名、章节、页码、片段摘要）与 `retrieval` 元信息。
+
+## MCP 接入
+
+检索能力同时以 MCP 工具暴露（streamable HTTP，随 api 服务一起运行），供任意支持 MCP 的 Agent 客户端调用：
+
+- 端点：`http://<host>:8080/mcp/`
+- 工具：
+  - `list_documents(query?)`：按车型名 / 文件名模糊解析出 `document_id`（可检索的文档需状态 `ready`）
+  - `search_knowledge_base(query, document_ids?)`：检索并返回带片段编号、文档名、章节、页码的资料块，与 `/api/search` 共用同一份检索实现；`document_ids` 是精确过滤，ID 来自 `list_documents`，不确定时直接全库检索
+- 质量参数（返回条数 k、父块归并、重排开关）由服务端 `.env` 统一控制，不进工具签名：工具接口是稳定契约，管线调优对调用方透明
+
+客户端配置示例（Claude Desktop / Cline 等通用）：
+
+```json
+{
+  "mcpServers": {
+    "pdf-rag": { "url": "http://localhost:8080/mcp/" }
+  }
+}
+```
+
+调试可用官方 Inspector：`npx @modelcontextprotocol/inspector`。公网部署时把实际域名填入 `MCP_ALLOWED_HOSTS`，否则端点可能因 Host 校验拒绝请求（内网留空即关闭校验）。
 
 ## 处理链路
 
