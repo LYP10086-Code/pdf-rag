@@ -8,6 +8,7 @@
 
 import logging
 import re
+import unicodedata
 from dataclasses import dataclass
 
 from rank_bm25 import BM25Okapi
@@ -24,8 +25,12 @@ _CJK_RUN_RE = re.compile(r"[\u4e00-\u9fff]+")
 
 
 def tokenize(text: str) -> list[str]:
-    """CJK 二元组 + 英文数字词；不引入词典分词依赖。"""
-    text = text.lower()
+    """CJK 二元组 + 英文数字词；不引入词典分词依赖。
+
+    NFKC 归一化把全角字母/数字（６、ＳＲＳ）折算成半角，
+    否则它们两个字符类都匹配不上，会被静默丢弃。
+    """
+    text = unicodedata.normalize("NFKC", text).lower()
     tokens = _LATIN_RE.findall(text)
     for run in _CJK_RUN_RE.findall(text):
         if len(run) == 1:
