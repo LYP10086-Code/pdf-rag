@@ -652,5 +652,6 @@ python tests/eval_compare.py    # rerank × 父块归并 消融对比
 - 接入 MinerU 并对比解析质量、页码准确率和入库耗时
 - PDF 解析阈值 profile 化，支持更多版式的车型手册
 - 文档增量更新与幂等重建
-- 检索与生成的固定评测集：Recall@K、MRR、nDCG、Faithfulness、引用准确率
+- ✅ 检索与生成的固定评测集：Recall@K、MRR、nDCG、Faithfulness（代理）、引用准确率（已落地：`tests/testset.json` 78 题 + `tests/eval_run.py` 基线 / `tests/eval_metrics.py` 指标评测，支持子块与父块归并两种模式，见 `tests/eval_metrics.md`）
+- 严格 Faithfulness 的 LLM-as-judge 实现
 - ✅ 任务队列化，解析不阻塞 API（已落地：Postgres `SKIP LOCKED` 队列 + 独立 worker 容器，支持租约重排与多 worker 水平扩展）
