@@ -76,8 +76,10 @@ class Settings(BaseSettings):
     supplement_max_chars: int = 6000
 
     # 父块 floor-merge 下限聚合：小碎片父块（<floor）与同章同节内相邻碎片
-    # 合并，合并后不超 ceiling；breadcrumb 取组内首个 fragment 的具体层级
-    parent_merge_enabled: bool = True
+    # 合并，合并后不超 ceiling；breadcrumb 取组内首个 fragment 的具体层级。
+    # 默认关闭（=父块切分后不做合并）：实测合并对检索指标影响很小，
+    # 关闭可保留每个小节的独立父块，引用溯源更精确。
+    parent_merge_enabled: bool = False
     parent_merge_floor_chars: int = 300
     parent_merge_ceiling_chars: int = 1000
 

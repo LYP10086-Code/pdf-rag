@@ -246,20 +246,20 @@
     }
   },
   "parent": {
-    "hit@1": 74,
-    "hit@3": 75,
-    "hit@5": 76,
+    "hit@1": 72,
+    "hit@3": 73,
+    "hit@5": 75,
     "hit@10": 76,
-    "mrr_sum": 74.7,
-    "ndcg_sum": 75.78179245221273,
+    "mrr_sum": 73.04285714285714,
+    "ndcg_sum": 73.56578101590476,
     "per_question": {
       "Q1": {
         "first_relevant_rank": 1,
         "first_loose_rank": 1
       },
       "Q2": {
-        "first_relevant_rank": null,
-        "first_loose_rank": 2
+        "first_relevant_rank": 7,
+        "first_loose_rank": 4
       },
       "Q3": {
         "first_relevant_rank": 1,
@@ -322,7 +322,7 @@
         "first_loose_rank": 1
       },
       "Q18": {
-        "first_relevant_rank": 1,
+        "first_relevant_rank": 5,
         "first_loose_rank": 1
       },
       "Q19": {
@@ -354,7 +354,7 @@
         "first_loose_rank": 1
       },
       "Q26": {
-        "first_relevant_rank": 1,
+        "first_relevant_rank": null,
         "first_loose_rank": 1
       },
       "Q27": {
@@ -563,17 +563,17 @@
       },
       "Q78": {
         "first_relevant_rank": 1,
-        "first_loose_rank": 1
+        "first_loose_rank": 3
       }
     }
   },
   "parent_loose": {
-    "hit@1": 75,
-    "hit@3": 77,
+    "hit@1": 74,
+    "hit@3": 76,
     "hit@5": 78,
     "hit@10": 78,
-    "mrr_sum": 76.2,
-    "ndcg_sum": 92.52213807987974
+    "mrr_sum": 75.28333333333333,
+    "ndcg_sum": 73.29767241296094
   },
   "total": 78,
   "chat": {
@@ -1136,6 +1136,6 @@
     "hit@5": 73,
     "hit@10": 75,
     "mrr_sum": 71.15,
-    "ndcg_sum": 98.80239442074841
+    "ndcg_sum": 70.66976411711511
   }
 }

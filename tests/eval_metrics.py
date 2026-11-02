@@ -110,12 +110,18 @@ def run_retrieval(api: str, doc_id: str, questions: list[dict]) -> dict:
         first_loose = next((i + 1 for i, f in enumerate(parent_loose) if f), None)
         first_child_cov = next((i + 1 for i, f in enumerate(child_cov_flags) if f), None)
 
-        for key, flags, first, ideal in (
-            ("child", child_flags, first_child, len(targets)),
-            ("child_evidence", child_cov_flags, first_child_cov, 1),
-            ("parent", parent_flags, first_parent, 1),
-            ("parent_loose", parent_loose, first_loose, 1),
+        for key, flags, first in (
+            ("child", child_flags, first_child),
+            ("child_evidence", child_cov_flags, first_child_cov),
+            ("parent", parent_flags, first_parent),
+            ("parent_loose", parent_loose, first_loose),
         ):
+            # 理想增益：target 精确判定按该题 targets 数；evidence 判定按
+            # 本次检索到的相关块数（保证 nDCG ≤ 1）
+            if key == "child":
+                ideal = len(targets)
+            else:
+                ideal = max(1, sum(1 for f in flags if f))
             bucket = out.setdefault(key, {})
             for k in K_LIST:
                 bucket.setdefault(f"hit@{k}", 0)
@@ -219,7 +225,11 @@ def render(data: dict, total: int) -> None:
             hits = bucket.get(f"hit@{k}", 0)
             lines.append(f"| Hit@{k} | {hits}/{total}（{hits / total * 100:.1f}%） |")
         lines.append(f"| MRR@{MRR_K} | {bucket.get('mrr_sum', 0) / total:.3f} |")
-        if mode == "child":  # 仅 target 精确判定有明确的理想相关块数
+        if mode == "child":
+            # target 精确判定：理想相关块数 = 该题 distinct targets
+            lines.append(f"| nDCG@{MRR_K} | {bucket.get('ndcg_sum', 0) / total:.3f} |")
+        elif mode in ("child_evidence", "parent"):
+            # evidence 判定：理想增益按检索到的相关块数，单题 nDCG 上限为 1
             lines.append(f"| nDCG@{MRR_K} | {bucket.get('ndcg_sum', 0) / total:.3f} |")
         for k in (5, 10):
             if f"target_recall_sum@{k}" in bucket:
